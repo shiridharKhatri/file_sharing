@@ -34,6 +34,12 @@ const fileSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Auto-delete files after 12 hours
+    expiresAt: {
+      type: Date,
+      default: () => new Date(Date.now() + 12 * 60 * 60 * 1000), // 12 hours from now
+      index: { expireAfterSeconds: 0 }, // MongoDB TTL index
+    },
   },
   {
     timestamps: true,
@@ -41,5 +47,6 @@ const fileSchema = new mongoose.Schema(
 )
 
 fileSchema.index({ shareId: 1 })
+fileSchema.index({ expiresAt: 1 }) // Index for cleanup job
 
 export default mongoose.model("File", fileSchema)

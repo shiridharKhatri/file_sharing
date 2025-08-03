@@ -109,39 +109,58 @@ router.get("/:shareId", async (req, res) => {
     const { shareId } = req.params
     const { password } = req.query
 
-    console.log("Looking for share:", shareId)
+    console.log("API: Looking for share:", shareId)
 
-    const share = await Share.findOne({ shareId }).populate("files")
-    console.log("Found share:", share ? `Yes (${share.mode})` : "No")
+    // Add timeout to prevent hanging requests
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Database query timeout")), 5000),
+    )
+
+    const queryPromise = Share.findOne({ shareId }).populate("files")
+    const share = await Promise.race([queryPromise, timeoutPromise])
+
+    console.log("API: Found share:", share ? `Yes (${share.mode})` : "No")
 
     if (!share) {
-      console.log("Share not found in database")
-      return res.status(404).json({ success: false, message: "Share not found" })
+      console.log("API: Share not found in database")
+      return res.status(404).json({
+        success: false,
+        message: "Share not found. It may have expired or the link is invalid.",
+        shareId: shareId,
+      })
     }
 
-    console.log("Share expires at:", share.expiresAt, "Current time:", new Date())
+    console.log("API: Share expires at:", share.expiresAt, "Current time:", new Date())
 
     if (share.isExpired) {
-      console.log("Share has expired")
-      return res.status(410).json({ success: false, message: "Share has expired" })
+      console.log("API: Share has expired")
+      return res.status(410).json({
+        success: false,
+        message: "Share has expired",
+        shareId: shareId,
+      })
     }
 
     // Check password for private shares
     if (share.mode === "private" && share.password) {
       if (!password) {
+        console.log("API: Password required for private share")
         return res.status(401).json({
           success: false,
           message: "Password required",
           requiresPassword: true,
+          shareId: shareId,
         })
       }
 
       const isValidPassword = await bcrypt.compare(password, share.password)
       if (!isValidPassword) {
+        console.log("API: Invalid password provided")
         return res.status(401).json({
           success: false,
           message: "Invalid password",
           requiresPassword: true,
+          shareId: shareId,
         })
       }
     }
@@ -153,18 +172,28 @@ router.get("/:shareId", async (req, res) => {
     const shareData = share.toObject()
     delete shareData.password // Never send password hash to client
 
-    console.log("Returning share data successfully")
+    console.log("API: Returning share data successfully")
 
     res.json({
       success: true,
       data: shareData,
     })
   } catch (error) {
-    console.error("Get share error:", error)
+    console.error("API: Get share error:", error)
+
+    if (error.message.includes("timeout")) {
+      return res.status(408).json({
+        success: false,
+        message: "Request timeout. Please try again.",
+        shareId: req.params.shareId,
+      })
+    }
+
     res.status(500).json({
       success: false,
-      message: "Failed to get share",
+      message: "Failed to get share. Please try again.",
       error: error.message,
+      shareId: req.params.shareId,
     })
   }
 })
