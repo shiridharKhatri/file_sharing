@@ -7,7 +7,7 @@ const Header = () => {
       <div className="header-container">
         <div className="logo">
           <Share2 className="logo-icon" />
-          <h1 className="logo-text">ShareFlow</h1>
+          <h1 className="logo-text">Shareee</h1>
         </div>
         <nav className="nav">
           <span className="nav-item">Professional File & Text Sharing</span>
