@@ -197,6 +197,25 @@ export function setupSocketHandlers(io) {
       }
     })
 
+    // Handle file upload events
+    socket.on("filesUploaded", (data) => {
+      const { shareId, files } = data
+      console.log(`Files uploaded to ${shareId}:`, files.length)
+
+      if (socket.shareId === shareId) {
+        socket.to(shareId).emit("filesUploaded", { files })
+      }
+    })
+
+    socket.on("fileDeleted", (data) => {
+      const { fileId } = data
+      console.log(`File deleted: ${fileId}`)
+
+      if (socket.shareId) {
+        socket.to(socket.shareId).emit("fileDeleted", { fileId })
+      }
+    })
+
     socket.on("cursorMove", (data) => {
       const { shareId, position } = data
 

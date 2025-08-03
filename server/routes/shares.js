@@ -19,7 +19,7 @@ router.post("/", async (req, res) => {
       })
     }
 
-    // Validate mode - fix the mode validation
+    // Validate mode
     if (!["global", "collaborative", "private"].includes(mode)) {
       return res.status(400).json({
         success: false,
@@ -38,9 +38,13 @@ router.post("/", async (req, res) => {
     const shareId = generateShareId()
     const expiresAt = calculateExpiryDate(expiry || "1hr")
 
+    console.log("Generated shareId:", shareId)
+    console.log("Expires at:", expiresAt)
+
     let hashedPassword = null
     if (mode === "private" && password) {
       hashedPassword = await bcrypt.hash(password, 10)
+      console.log("Password hashed successfully")
     }
 
     // Set different settings based on mode
@@ -52,13 +56,13 @@ router.post("/", async (req, res) => {
 
     switch (mode) {
       case "global":
-        settings.maxUsers = 50 // Allow more users for global sharing
+        settings.maxUsers = 50
         break
       case "collaborative":
-        settings.maxUsers = 20 // Medium limit for collaborative
+        settings.maxUsers = 20
         break
       case "private":
-        settings.maxUsers = 5 // Fewer users for private sharing
+        settings.maxUsers = 5
         break
     }
 
@@ -76,8 +80,13 @@ router.post("/", async (req, res) => {
     const savedShare = await share.save()
     console.log("Share saved successfully:", savedShare.shareId)
 
+    // Return the response with proper structure
     res.json({
       success: true,
+      shareId: savedShare.shareId, // Make sure this is at the top level
+      shareUrl: `http://localhost:5173/share/${savedShare.shareId}`,
+      expiresAt: savedShare.expiresAt,
+      mode: savedShare.mode,
       data: {
         shareId: savedShare.shareId,
         shareUrl: `http://localhost:5173/share/${savedShare.shareId}`,
