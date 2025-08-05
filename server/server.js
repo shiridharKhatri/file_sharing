@@ -23,7 +23,7 @@ const server = createServer(app)
 // Configure Socket.IO with proper CORS
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "https://qrlwr7st-5173.inc1.devtunnels.ms"],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: false,
   },
@@ -31,10 +31,26 @@ const io = new Server(server, {
   allowEIO3: true,
 })
 
+// Add middleware to better capture client IP
+io.use((socket, next) => {
+  // Try to get the real client IP from various sources
+  const forwarded = socket.handshake.headers["x-forwarded-for"]
+  const realIP = socket.handshake.headers["x-real-ip"]
+  const remoteAddress = socket.conn.remoteAddress
+  const socketAddress = socket.handshake.address
+
+  // Priority order: x-real-ip, first x-forwarded-for, remoteAddress, handshake.address
+  const clientIP = realIP || (forwarded ? forwarded.split(",")[0].trim() : null) || remoteAddress || socketAddress
+
+  // Store the detected IP on the socket for later use
+  socket.clientIP = clientIP
+  next()
+})
+
 // Configure Express CORS
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "https://qrlwr7st-5173.inc1.devtunnels.ms"],
     credentials: false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
@@ -52,20 +68,16 @@ app.options("*", cors())
 const uploadsDir = path.join(__dirname, "uploads")
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true })
-  console.log("Created uploads directory")
 }
 app.use("/uploads", express.static(uploadsDir))
 
 // Connect to database
-console.log("Connecting to database...")
 await connectDB()
 
 // Setup socket handlers
-console.log("Setting up socket handlers...")
 setupSocketHandlers(io)
 
 // Start cleanup job
-console.log("Starting cleanup job...")
 startCleanupJob()
 
 // API routes
@@ -117,9 +129,6 @@ const PORT = process.env.PORT || 5000
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`)
-  console.log(`📡 Socket.IO enabled`)
-  console.log(`🌐 CORS enabled for localhost:5173`)
-  console.log(`📁 Uploads directory: ${uploadsDir}`)
 })
 
 // Graceful shutdown

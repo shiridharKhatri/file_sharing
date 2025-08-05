@@ -9,17 +9,49 @@ export async function cleanupExpiredShares() {
       expiresAt: { $lt: new Date() },
     }).populate("files")
 
+    let deletedShares = 0
     for (const share of expiredShares) {
       if (share.files && share.files.length > 0) {
         await deleteFiles(share.files)
       }
 
       await Share.findByIdAndDelete(share._id)
+      deletedShares++
     }
 
-    return expiredShares.length
+    return deletedShares
   } catch (error) {
-    console.error("Cleanup error:", error)
+    console.error("Share cleanup error:", error)
+    return 0
+  }
+}
+
+export async function cleanupExpiredFiles() {
+  try {
+    const expiredFiles = await File.find({
+      expiresAt: { $lt: new Date() },
+    })
+
+    let deletedFiles = 0
+    for (const file of expiredFiles) {
+      try {
+        // Delete file from filesystem
+        await fs.unlink(file.path)
+      } catch (error) {
+        console.warn(`Failed to delete file from disk ${file.originalName}:`, error.message)
+      }
+
+      // Remove file from database
+      await File.findByIdAndDelete(file._id)
+      deletedFiles++
+
+      // Remove file reference from share
+      await Share.updateMany({ files: file._id }, { $pull: { files: file._id } })
+    }
+
+    return deletedFiles
+  } catch (error) {
+    console.error("File cleanup error:", error)
     return 0
   }
 }
@@ -39,8 +71,17 @@ export async function deleteFiles(files) {
 }
 
 export function startCleanupJob() {
-  cron.schedule("0 * * * *", () => {
-    console.log("Running cleanup for expired shares...")
-    cleanupExpiredShares()
+
+  // Run cleanup every hour
+  cron.schedule("0 * * * *", async () => {
+    const deletedShares = await cleanupExpiredShares()
+    const deletedFiles = await cleanupExpiredFiles()
+    console.log(`Cleanup completed: ${deletedShares} shares, ${deletedFiles} files deleted`)
   })
+
+  // Run cleanup every 30 minutes for files (more frequent for 12-hour expiry)
+  cron.schedule("*/30 * * * *", async () => {
+    const deletedFiles = await cleanupExpiredFiles()
+  })
+
 }

@@ -28,6 +28,15 @@ const shareSchema = new mongoose.Schema(
     password: {
       type: String,
       default: null,
+      validate: {
+        validator: function (v) {
+          if (this.mode === "private") {
+            return v && v.length > 10
+          }
+          return true
+        },
+        message: "Private shares must have a valid password hash",
+      },
     },
     expiresAt: {
       type: Date,
@@ -62,6 +71,18 @@ const shareSchema = new mongoose.Schema(
     timestamps: true,
   },
 )
+
+shareSchema.pre("save", function (next) {
+  if (this.isModified("password")) {
+    console.log("=== SAVING SHARE WITH PASSWORD ===")
+    console.log("ShareId:", this.shareId)
+    console.log("Mode:", this.mode)
+    console.log("Password field exists:", !!this.password)
+    console.log("Password length:", this.password ? this.password.length : 0)
+    console.log("Password starts with:", this.password ? this.password.substring(0, 10) : "null")
+  }
+  next()
+})
 
 shareSchema.virtual("isExpired").get(function () {
   return new Date() > this.expiresAt

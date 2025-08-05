@@ -40,7 +40,6 @@ export async function deleteFiles(files) {
 
 export function startCleanupJob() {
   cron.schedule("0 * * * *", () => {
-    console.log("Running cleanup for expired shares...")
     cleanupExpiredShares()
   })
 }

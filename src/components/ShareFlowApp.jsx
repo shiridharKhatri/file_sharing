@@ -23,6 +23,7 @@ import {
   Users,
   Lock,
   Wifi,
+  FolderOpen,
 } from "lucide-react"
 import { detectCodeLanguage, getFileIcon, downloadTextAsFile, getLanguageExtension } from "../utils/helpers"
 import { useShare } from "../context/ShareContext"
@@ -55,6 +56,7 @@ function ShareFlowApp() {
   const [showUploadMenu, setShowUploadMenu] = useState(false)
   const [detectedLanguage, setDetectedLanguage] = useState("plaintext")
   const [showSettings, setShowSettings] = useState(false)
+  const [showFilesPanel, setShowFilesPanel] = useState(false)
   const [syntaxHighlighting, setSyntaxHighlighting] = useState(true)
   const [fontSize, setFontSize] = useState(13)
   const [tabSize, setTabSize] = useState(2)
@@ -66,6 +68,7 @@ function ShareFlowApp() {
 
   const fileInputRef = useRef(null)
   const uploadMenuRef = useRef(null)
+  const filesPanelRef = useRef(null)
   const textareaRef = useRef(null)
 
   const modes = [
@@ -112,6 +115,9 @@ function ShareFlowApp() {
       if (uploadMenuRef.current && !uploadMenuRef.current.contains(event.target)) {
         setShowUploadMenu(false)
       }
+      if (filesPanelRef.current && !filesPanelRef.current.contains(event.target)) {
+        setShowFilesPanel(false)
+      }
     }
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
@@ -120,7 +126,6 @@ function ShareFlowApp() {
   // Auto-join public/collaborative shares when connected and mode is selected
   useEffect(() => {
     if (connected && (selectedMode === "public" || selectedMode === "collaborative") && !isSharing) {
-      console.log(`Auto-joining ${selectedMode} mode`)
       handleAutoJoin()
     }
   }, [connected, selectedMode])
@@ -130,7 +135,6 @@ function ShareFlowApp() {
     if (share && share.textContent !== undefined && isSharing) {
       // Only update if the text is actually different and we're not currently typing
       if (share.textContent !== textContent && !typingTimeout) {
-        console.log("Updating text from share:", share.textContent.substring(0, 50) + "...")
         setTextContent(share.textContent)
         setDetectedLanguage(share.language || detectCodeLanguage(share.textContent) || "plaintext")
       }
@@ -140,7 +144,15 @@ function ShareFlowApp() {
   // Show error notifications
   useEffect(() => {
     if (error) {
-      showNotification(error, "error")
+      // Special handling for network restriction errors
+      if (error.includes("local network") || error.includes("NETWORK_RESTRICTED")) {
+        showNotification(
+          "⚠️ Collaborative mode is restricted to local network users only. Switch to Public mode for external access.",
+          "error",
+        )
+      } else {
+        showNotification(error, "error")
+      }
       clearError()
     }
   }, [error, clearError])
@@ -167,17 +179,24 @@ function ShareFlowApp() {
   }
 
   const addFiles = async (newFiles) => {
+
     if (!currentShareId) {
       showNotification("Please start sharing first", "error")
       return
     }
 
+    if (!newFiles || newFiles.length === 0) {
+      showNotification("No files selected", "error")
+      return
+    }
+
     try {
-      await uploadFiles(currentShareId, Array.from(newFiles))
+      await uploadFiles(currentShareId, newFiles)
       setShowUploadMenu(false)
       showNotification(`${newFiles.length} file(s) uploaded successfully`)
     } catch (error) {
-      showNotification("Failed to upload files", "error")
+      console.error("ShareFlowApp: File upload failed:", error)
+      showNotification(`Failed to upload files: ${error.message}`, "error")
     }
   }
 
@@ -190,6 +209,36 @@ function ShareFlowApp() {
     }
   }
 
+  const downloadFile = async (fileId, fileName) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_HOST}/api/files/download/${fileId}`)
+
+      if (!response.ok) {
+        throw new Error("Failed to download file")
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+
+      showNotification(`Downloaded ${fileName}`)
+    } catch (error) {
+      console.error("Download failed:", error)
+      showNotification("Failed to download file", "error")
+    }
+  }
+
+  const handleFileChipClick = (file) => {
+    // Download the file when clicking on the chip
+    downloadFile(file.id, file.originalName)
+  }
+
   const handleModeChange = (newMode) => {
     if (isSharing && newMode !== selectedMode) {
       // Reset sharing state when changing modes
@@ -199,6 +248,11 @@ function ShareFlowApp() {
     }
     setSelectedMode(newMode)
 
+    // Show info about collaborative mode
+    if (newMode === "collaborative") {
+      showNotification("🏠 Collaborative mode: Only users on your local network can access this share", "info")
+    }
+
     // Auto-join if switching to public/collaborative and connected
     if (connected && (newMode === "public" || newMode === "collaborative")) {
       setTimeout(() => {
@@ -207,20 +261,19 @@ function ShareFlowApp() {
           setCurrentShareId(publicShareId)
           setIsSharing(true)
           joinShare(publicShareId, "User")
-          showNotification("Switched to public collaboration!")
+          showNotification("🌍 Switched to public collaboration!")
         } else if (newMode === "collaborative") {
           const localShareId = "local-network"
           setCurrentShareId(localShareId)
           setIsSharing(true)
           joinShare(localShareId, "User")
-          showNotification("Switched to local network collaboration!")
+          showNotification("🏠 Switched to local network collaboration!")
         }
       }, 100)
     }
   }
 
   const handleStartSharing = async () => {
-    console.log(`Starting sharing in ${selectedMode} mode`)
 
     if (selectedMode === "public" || selectedMode === "collaborative") {
       // For public/collaborative, just sync current text if any
@@ -246,9 +299,8 @@ function ShareFlowApp() {
       }
 
       try {
-        console.log("Creating private share")
         const shareData = {
-          mode: "private", // Use "private" instead of selectedMode
+          mode: "private",
           textContent,
           password,
           expiry,
@@ -257,7 +309,10 @@ function ShareFlowApp() {
         }
 
         const result = await createShare(shareData)
-        console.log("Private share created:", result.shareId)
+
+        if (!result.shareId) {
+          throw new Error("No share ID returned from server")
+        }
 
         const newShareLink = `${window.location.origin}/share/${result.shareId}`
         setShareLink(newShareLink)
@@ -265,7 +320,6 @@ function ShareFlowApp() {
         setIsSharing(true)
 
         // Join the private share
-        console.log("Joining private share")
         joinShare(result.shareId, "Creator")
 
         showNotification("Private link generated! Share the link with others.")
@@ -293,7 +347,6 @@ function ShareFlowApp() {
         setTyping(currentShareId, false)
 
         // Send the text update
-        console.log("Sending text update to server")
         updateText(currentShareId, newText, detectedLanguage)
         setTypingTimeout(null)
       }, 1000)
@@ -330,6 +383,14 @@ function ShareFlowApp() {
     }
 
     return selectedMode === "public" ? "Public Sharing" : "Local Sharing"
+  }
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return "0 Bytes"
+    const k = 1024
+    const sizes = ["Bytes", "KB", "MB", "GB"]
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
 
   const currentMode = modes.find((m) => m.id === selectedMode)
@@ -393,21 +454,42 @@ function ShareFlowApp() {
                 {files.slice(0, 3).map((file) => {
                   const IconComponent = getFileIcon(file.mimetype)
                   return (
-                    <div key={file.id} className="file-chip">
+                    <div key={file.id} className="file-chip clickable" onClick={() => handleFileChipClick(file)}>
                       <IconComponent size={12} />
                       <span>{file.originalName}</span>
-                      <button onClick={() => removeFile(file.id)}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          removeFile(file.id)
+                        }}
+                        title="Remove file"
+                      >
                         <X size={10} />
                       </button>
                     </div>
                   )
                 })}
-                {files.length > 3 && <div className="file-chip more">+{files.length - 3}</div>}
+                {files.length > 3 && (
+                  <div className="file-chip more" onClick={() => setShowFilesPanel(true)}>
+                    +{files.length - 3}
+                  </div>
+                )}
               </div>
             )}
 
             <div className="upload-section" ref={uploadMenuRef}>
-              <button className="upload-btn" onClick={() => setShowUploadMenu(!showUploadMenu)} disabled={!isSharing}>
+              <button
+                className="upload-btn"
+                onClick={() => setShowUploadMenu(!showUploadMenu)}
+                disabled={!isSharing || !connected}
+                title={
+                  !isSharing
+                    ? "Start sharing first to upload files"
+                    : !connected
+                      ? "Connecting to server..."
+                      : "Upload files"
+                }
+              >
                 <Upload size={16} />
                 <span>Upload</span>
               </button>
@@ -425,6 +507,12 @@ function ShareFlowApp() {
                 </div>
               )}
             </div>
+
+            {files.length > 0 && (
+              <button className="icon-btn" onClick={() => setShowFilesPanel(!showFilesPanel)} title="View all files">
+                <FolderOpen size={16} />
+              </button>
+            )}
           </div>
 
           <div className="header-actions">
@@ -473,6 +561,53 @@ function ShareFlowApp() {
         onChange={(e) => addFiles(e.target.files)}
         style={{ display: "none" }}
       />
+
+      {/* Files Panel */}
+      {showFilesPanel && files.length > 0 && (
+        <div className="files-panel" ref={filesPanelRef}>
+          <div className="files-panel-header">
+            <h3>Uploaded Files ({files.length})</h3>
+            <button onClick={() => setShowFilesPanel(false)}>
+              <X size={16} />
+            </button>
+          </div>
+          <div className="files-panel-content">
+            {files.map((file) => {
+              const IconComponent = getFileIcon(file.mimetype)
+              return (
+                <div key={file.id} className="file-panel-item">
+                  <div className="file-panel-info">
+                    <div className="file-panel-icon">
+                      <IconComponent size={20} />
+                    </div>
+                    <div className="file-panel-details">
+                      <div className="file-panel-name">{file.originalName}</div>
+                      <div className="file-panel-meta">
+                        {formatFileSize(file.size)} • Uploaded {new Date(file.uploadedAt).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="file-panel-actions">
+                    <button
+                      className="file-panel-btn download"
+                      onClick={() => downloadFile(file.id, file.originalName)}
+                      title="Download file"
+                    >
+                      <Download size={14} />
+                    </button>
+                    <button className="file-panel-btn delete" onClick={() => removeFile(file.id)} title="Delete file">
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="files-panel-footer">
+            <small>Files auto-delete after 12 hours</small>
+          </div>
+        </div>
+      )}
 
       {/* Editor */}
       <main className="editor-container">
@@ -533,7 +668,9 @@ function ShareFlowApp() {
                 : `Start typing or paste your code here...
 
 // ShareFlow supports real-time collaboration
-// Your content will be automatically synced with other users in ${selectedMode} mode`
+// Your content will be automatically synced with other users in ${selectedMode} mode
+// Upload files using the Upload button in the header
+// Click on file chips to download them`
             }
             value={textContent}
             onChange={(e) => handleTextChange(e.target.value)}
@@ -569,7 +706,7 @@ function ShareFlowApp() {
                 placeholder="Enter password for private sharing..."
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="password-input"
+                className="password-inputt"
               />
             </div>
           )}
@@ -585,6 +722,14 @@ function ShareFlowApp() {
                 <option value="7d">7 days</option>
                 <option value="never">Never</option>
               </select>
+            </div>
+          )}
+
+          {files.length > 0 && (
+            <div className="mode-description">
+              <File size={12} />
+              <span>{files.length} files uploaded</span>
+              <span style={{ fontSize: "10px", color: "#8b949e" }}>Auto-delete in 12h</span>
             </div>
           )}
         </div>
@@ -647,6 +792,30 @@ function ShareFlowApp() {
                   <label>
                     <span>Share ID</span>
                     <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{currentShareId || "None"}</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="setting-group">
+                <h4>Files</h4>
+                <div className="setting-item">
+                  <label>
+                    <span>Uploaded Files</span>
+                    <span>{files.length}</span>
+                  </label>
+                </div>
+                <div className="setting-item">
+                  <label>
+                    <span>Upload Status</span>
+                    <span className={`status ${isSharing && connected ? "connected" : "disconnected"}`}>
+                      {isSharing && connected ? "Ready" : "Disabled"}
+                    </span>
+                  </label>
+                </div>
+                <div className="setting-item">
+                  <label>
+                    <span>Auto-Delete</span>
+                    <span style={{ color: "#d29922" }}>12 hours</span>
                   </label>
                 </div>
               </div>

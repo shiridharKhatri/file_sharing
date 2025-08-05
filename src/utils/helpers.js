@@ -1,8 +1,19 @@
-import { File, Code, ImageIcon, FileText, Archive, Music, Video } from "lucide-react"
+import crypto from "crypto"
+import {
+  File,
+  FileText,
+  ImageIcon,
+  Video,
+  Music,
+  Archive,
+  Code,
+  Database,
+  FileSpreadsheet,
+  Paperclip,
+} from "lucide-react"
 
 export function generateShareId() {
-  // return crypto.randomBytes(8).toString("hex")
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+  return crypto.randomBytes(8).toString("hex")
 }
 
 export function calculateExpiryDate(expiry) {
@@ -26,7 +37,12 @@ export function calculateExpiryDate(expiry) {
   }
 }
 
-export function detectCodeLanguage(text) {
+/**
+ * Detect programming language from text content
+ * @param {string} text - Text content to analyze
+ * @returns {string|null} Detected language or null
+ */
+export const detectCodeLanguage = (text) => {
   if (!text || text.trim().length < 10) return null
 
   const patterns = {
@@ -87,44 +103,80 @@ export function detectCodeLanguage(text) {
   return maxScore >= 2 ? detectedLang : null
 }
 
-export function getFileIcon(mimetype) {
-  if (mimetype.startsWith("image/")) return ImageIcon
-  if (mimetype.startsWith("video/")) return Video
-  if (mimetype.startsWith("audio/")) return Music
-  if (mimetype.startsWith("text/") || mimetype === "application/json") return FileText
-  if (mimetype.includes("zip") || mimetype.includes("rar") || mimetype.includes("tar")) return Archive
-  if (mimetype.includes("javascript") || mimetype.includes("python") || mimetype.includes("java")) return Code
+/**
+ * Get file icon component based on MIME type
+ * @param {string} mimeType - MIME type of the file
+ * @returns {React.Component} Lucide icon component
+ */
+export const getFileIcon = (mimeType) => {
+  if (!mimeType) return Paperclip
+
+  // Image files
+  if (mimeType.startsWith("image/")) {
+    return ImageIcon
+  }
+
+  // Video files
+  if (mimeType.startsWith("video/")) {
+    return Video
+  }
+
+  // Audio files
+  if (mimeType.startsWith("audio/")) {
+    return Music
+  }
+
+  // Text files
+  if (mimeType.startsWith("text/") || mimeType === "application/json") {
+    return FileText
+  }
+
+  // Code files
+  if (
+    mimeType === "application/javascript" ||
+    mimeType === "text/javascript" ||
+    mimeType === "application/typescript" ||
+    mimeType === "text/x-python" ||
+    mimeType === "text/x-java-source" ||
+    mimeType === "text/x-c" ||
+    mimeType === "text/x-c++" ||
+    mimeType === "text/html" ||
+    mimeType === "text/css"
+  ) {
+    return Code
+  }
+
+  // Spreadsheet files
+  if (mimeType.includes("spreadsheet") || mimeType.includes("excel") || mimeType === "text/csv") {
+    return FileSpreadsheet
+  }
+
+  // Database files
+  if (mimeType.includes("database") || mimeType === "application/x-sqlite3") {
+    return Database
+  }
+
+  // Archive files
+  if (
+    mimeType.includes("zip") ||
+    mimeType.includes("rar") ||
+    mimeType.includes("tar") ||
+    mimeType.includes("gzip") ||
+    mimeType === "application/x-7z-compressed"
+  ) {
+    return Archive
+  }
+
+  // Default file icon
   return File
 }
 
-export function validateForm({ files, textContent, password, selectedMode }) {
-  const errors = []
-
-  if (!textContent.trim()) {
-    errors.push("Please enter some content")
-  }
-
-  if (selectedMode === "private" && !password.trim()) {
-    errors.push("Password is required for private sharing")
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-  }
-}
-
-export function downloadTextAsFile(text, filename) {
-  const element = document.createElement("a")
-  const file = new Blob([text], { type: "text/plain" })
-  element.href = URL.createObjectURL(file)
-  element.download = filename
-  document.body.appendChild(element)
-  element.click()
-  document.body.removeChild(element)
-}
-
-export function getLanguageExtension(language) {
+/**
+ * Get language file extension
+ * @param {string} language - Programming language
+ * @returns {string} File extension
+ */
+export const getLanguageExtension = (language) => {
   const extensions = {
     javascript: ".js",
     python: ".py",
@@ -132,8 +184,48 @@ export function getLanguageExtension(language) {
     css: ".css",
     html: ".html",
     json: ".json",
+    typescript: ".ts",
+    cpp: ".cpp",
+    c: ".c",
+    php: ".php",
+    ruby: ".rb",
+    go: ".go",
+    rust: ".rs",
+    swift: ".swift",
+    kotlin: ".kt",
+    scala: ".scala",
     plaintext: ".txt",
   }
 
   return extensions[language] || ".txt"
+}
+
+/**
+ * Download text content as file
+ * @param {string} content - Text content to download
+ * @param {string} filename - Name of the file
+ */
+export const downloadTextAsFile = (content, filename) => {
+  const element = document.createElement("a")
+  const file = new Blob([content], { type: "text/plain" })
+  element.href = URL.createObjectURL(file)
+  element.download = filename
+  document.body.appendChild(element)
+  element.click()
+  document.body.removeChild(element)
+}
+
+/**
+ * Format file size in bytes to human readable format
+ * @param {number} bytes - File size in bytes
+ * @returns {string} Formatted file size
+ */
+export const formatFileSize = (bytes) => {
+  if (bytes === 0) return "0 Bytes"
+
+  const k = 1024
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB"]
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+
+  return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
 }

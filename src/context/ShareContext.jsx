@@ -75,19 +75,17 @@ export function ShareProvider({ children }) {
 
   useEffect(() => {
     // Initialize socket connection
-    const socket = io("http://localhost:5000", {
+    const socket = io(import.meta.env.VITE_BACKEND_HOST || "http://localhost:5000", {
       transports: ["websocket", "polling"],
     })
 
     socketRef.current = socket
 
     socket.on("connect", () => {
-      console.log("Socket connected:", socket.id)
       dispatch({ type: ACTIONS.SET_CONNECTED, payload: true })
     })
 
     socket.on("disconnect", () => {
-      console.log("Socket disconnected")
       dispatch({ type: ACTIONS.SET_CONNECTED, payload: false })
     })
 
@@ -98,7 +96,6 @@ export function ShareProvider({ children }) {
 
     // Handle share state updates
     socket.on("shareState", (data) => {
-      console.log("Received share state:", data)
       dispatch({
         type: ACTIONS.SET_SHARE,
         payload: {
@@ -113,18 +110,15 @@ export function ShareProvider({ children }) {
 
     // Handle real-time text updates
     socket.on("textUpdate", (data) => {
-      console.log("Received text update from:", data.updatedBy)
       dispatch({ type: ACTIONS.UPDATE_TEXT, payload: data })
     })
 
     // Handle user events
     socket.on("userJoined", (data) => {
-      console.log("User joined:", data.username)
       dispatch({ type: ACTIONS.SET_ACTIVE_USERS, payload: data.activeUsers || 1 })
     })
 
     socket.on("userLeft", (data) => {
-      console.log("User left:", data.username)
       dispatch({ type: ACTIONS.SET_ACTIVE_USERS, payload: data.activeUsers || 0 })
     })
 
@@ -169,15 +163,21 @@ export function ShareProvider({ children }) {
   const createShare = async (shareData) => {
     dispatch({ type: ACTIONS.SET_LOADING, payload: true })
     try {
-      console.log("Creating share:", shareData)
       const response = await shareAPI.create(shareData)
-      console.log("Share created:", response.data)
+
+      // Extract shareId from response - check both locations
+      const shareId = response.data.shareId || response.data.data?.shareId
+
+      if (!shareId) {
+        console.error("No shareId in response:", response.data)
+        throw new Error("Failed to get share ID from server response")
+      }
 
       // Store the share data
       dispatch({
         type: ACTIONS.SET_SHARE,
         payload: {
-          shareId: response.data.shareId,
+          shareId: shareId,
           textContent: shareData.textContent,
           language: shareData.language,
           mode: shareData.mode,
@@ -185,7 +185,11 @@ export function ShareProvider({ children }) {
         },
       })
 
-      return response.data
+      return {
+        shareId: shareId,
+        shareUrl: `http://localhost:5173/share/${shareId}`,
+        ...response.data,
+      }
     } catch (error) {
       console.error("Create share error:", error)
       dispatch({ type: ACTIONS.SET_ERROR, payload: error.message })
@@ -197,7 +201,6 @@ export function ShareProvider({ children }) {
 
   const joinShare = (shareId, username = "Anonymous") => {
     if (socketRef.current && socketRef.current.connected) {
-      console.log("Joining share:", shareId, "as", username)
       currentShareIdRef.current = shareId
       socketRef.current.emit("joinShare", { shareId, username })
     } else {
@@ -208,7 +211,6 @@ export function ShareProvider({ children }) {
 
   const updateText = (shareId, textContent, language) => {
     if (socketRef.current && socketRef.current.connected && currentShareIdRef.current === shareId) {
-      console.log("Sending text update:", { shareId, textContent: textContent.substring(0, 50) + "...", language })
       socketRef.current.emit("textChange", { shareId, textContent, language })
     }
   }
@@ -222,10 +224,43 @@ export function ShareProvider({ children }) {
   const uploadFiles = async (shareId, files) => {
     dispatch({ type: ACTIONS.SET_LOADING, payload: true })
     try {
-      const response = await shareAPI.uploadFiles(shareId, files)
-      dispatch({ type: ACTIONS.ADD_FILES, payload: response.data.files })
+
+      // Convert File objects to actual files for FormData
+      const fileArray = Array.from(files).map((fileItem) => {
+        // If it's already a File object, use it directly
+        if (fileItem instanceof File) {
+          return fileItem
+        }
+        // If it's our custom file object with a 'file' property, extract the File
+        if (fileItem.file instanceof File) {
+          return fileItem.file
+        }
+        // Otherwise, assume it's already a File
+        return fileItem
+      })
+
+      const response = await shareAPI.uploadFiles(shareId, fileArray)
+
+      // Add files to state with proper structure
+      const uploadedFiles = response.data.data?.files || response.data.files || []
+      const formattedFiles = uploadedFiles.map((file) => ({
+        id: file.id || file._id,
+        originalName: file.originalName,
+        size: file.size,
+        mimetype: file.mimetype || "application/octet-stream",
+        uploadedAt: file.uploadedAt || new Date().toISOString(),
+      }))
+
+      dispatch({ type: ACTIONS.ADD_FILES, payload: formattedFiles })
+
+      // Emit socket event for real-time updates
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit("filesUploaded", { shareId, files: formattedFiles })
+      }
+
       return response.data
     } catch (error) {
+      console.error("Upload files error:", error)
       dispatch({ type: ACTIONS.SET_ERROR, payload: error.message })
       throw error
     } finally {
@@ -237,7 +272,13 @@ export function ShareProvider({ children }) {
     try {
       await shareAPI.deleteFile(fileId)
       dispatch({ type: ACTIONS.REMOVE_FILE, payload: fileId })
+
+      // Emit socket event for real-time updates
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit("fileDeleted", { fileId })
+      }
     } catch (error) {
+      console.error("Delete file error:", error)
       dispatch({ type: ACTIONS.SET_ERROR, payload: error.message })
       throw error
     }

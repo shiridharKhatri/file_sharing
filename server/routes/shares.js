@@ -1,291 +1,336 @@
-import express from "express"
-import bcrypt from "bcryptjs"
-import Share from "../database/models/Share.js"
-import { generateShareId, calculateExpiryDate } from "../utils/helpers.js"
+import express from "express";
+import bcrypt from "bcryptjs";
+import Share from "../database/models/Share.js";
+import { generateShareId, calculateExpiryDate } from "../utils/helpers.js";
 
-const router = express.Router()
+const router = express.Router();
+
+// Debug endpoint to check share details
+router.get("/debug/:shareId", async (req, res) => {
+    try {
+        const { shareId } = req.params;
+        const share = await Share.findOne({ shareId });
+
+        if (!share) {
+            return res.status(404).json({ message: "Share not found" });
+        }
+
+        res.json({
+            shareId: share.shareId,
+            mode: share.mode,
+            hasPassword: !!share.password,
+            passwordLength: share.password ? share.password.length : 0,
+            passwordHash: share.password ? share.password.substring(0, 20) + "..." : null,
+            createdAt: share.createdAt,
+            expiresAt: share.expiresAt,
+            isExpired: share.isExpired,
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Database inspection endpoint
+router.get("/inspect/:shareId", async (req, res) => {
+    try {
+        const { shareId } = req.params;
+        const share = await Share.findOne({ shareId });
+
+        if (!share) {
+            return res.status(404).json({ error: "Share not found" });
+        }
+
+        // Raw database inspection
+        const rawData = {
+            shareId: share.shareId,
+            mode: share.mode,
+            title: share.title,
+            hasPassword: !!share.password,
+            passwordExists: share.password !== null && share.password !== undefined,
+            passwordLength: share.password ? share.password.length : 0,
+            passwordType: typeof share.password,
+            passwordValue: share.password ? share.password.substring(0, 30) + "..." : share.password,
+            createdAt: share.createdAt,
+            expiresAt: share.expiresAt,
+            isExpired: share.isExpired,
+        };
+
+        // Test bcrypt with known values
+        if (share.password) {
+            try {
+                const testPasswords = ["123", "1234", "wrong", "test"];
+                const testResults = {};
+
+                for (const testPass of testPasswords) {
+                    testResults[testPass] = await bcrypt.compare(testPass, share.password);
+                }
+
+                rawData.bcryptTests = testResults;
+            } catch (e) {
+                rawData.bcryptError = e.message;
+            }
+        }
+
+        res.json(rawData);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 router.post("/", async (req, res) => {
-  try {
-    const { mode, textContent, password, expiry, language, title } = req.body
+    try {
+        const { mode, textContent, password, expiry, language, title } = req.body;
 
-    console.log("Creating share with data:", { mode, expiry, language, title, contentLength: textContent?.length })
+        // Validate required fields
+        if (!mode || !textContent) {
+            return res.status(400).json({
+                success: false,
+                message: "Mode and text content are required",
+            });
+        }
 
-    // Validate required fields
-    if (!mode || !textContent) {
-      return res.status(400).json({
-        success: false,
-        message: "Mode and text content are required",
-      })
+        // Validate mode
+        if (!["global", "collaborative", "private"].includes(mode)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid sharing mode",
+            });
+        }
+
+        // STRICT validation for private mode - MUST have password
+        if (mode === "private" && (!password || password.trim().length === 0)) {
+            return res.status(400).json({
+                success: false,
+                message: "Password is required for private sharing",
+            });
+        }
+
+        const shareId = generateShareId();
+        const expiresAt = calculateExpiryDate(expiry || "1hr");
+        let hashedPassword = null;
+        if (password && password.trim().length > 0) {
+            // Hash password for ANY share that has a password
+            hashedPassword = await bcrypt.hash(password.trim(), 12);
+        }
+
+        const share = new Share({
+            shareId,
+            mode,
+            textContent: textContent || "",
+            language: language || "plaintext",
+            title: title || "Untitled Share",
+            password: hashedPassword,
+            expiresAt,
+            settings: {
+                allowEdit: true,
+                allowDownload: true,
+                maxUsers: mode === "global" ? 50 : mode === "collaborative" ? 20 : 5,
+            },
+        });
+
+        const savedShare = await share.save();
+        res.json({
+            success: true,
+            shareId: savedShare.shareId,
+            shareUrl: `${req.protocol}://${req.get("host")}/share/${savedShare.shareId}`,
+            expiresAt: savedShare.expiresAt,
+            mode: savedShare.mode,
+        });
+    } catch (error) {
+        console.error("Create share error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to create share",
+            error: error.message,
+        });
     }
-
-    // Validate mode
-    if (!["global", "collaborative", "private"].includes(mode)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid sharing mode",
-      })
-    }
-
-    // Validate private mode requirements
-    if (mode === "private" && !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Password is required for private sharing",
-      })
-    }
-
-    const shareId = generateShareId()
-    const expiresAt = calculateExpiryDate(expiry || "1hr")
-
-    console.log("Generated shareId:", shareId)
-    console.log("Expires at:", expiresAt)
-
-    let hashedPassword = null
-    if (mode === "private" && password) {
-      hashedPassword = await bcrypt.hash(password, 10)
-      console.log("Password hashed successfully")
-    }
-
-    // Set different settings based on mode
-    const settings = {
-      allowEdit: true,
-      allowDownload: true,
-      maxUsers: 10,
-    }
-
-    switch (mode) {
-      case "global":
-        settings.maxUsers = 50
-        break
-      case "collaborative":
-        settings.maxUsers = 20
-        break
-      case "private":
-        settings.maxUsers = 5
-        break
-    }
-
-    const share = new Share({
-      shareId,
-      mode,
-      textContent: textContent || "",
-      language: language || "plaintext",
-      title: title || "Untitled Share",
-      password: hashedPassword,
-      expiresAt,
-      settings,
-    })
-
-    const savedShare = await share.save()
-    console.log("Share saved successfully:", savedShare.shareId)
-
-    // Return the response with proper structure
-    res.json({
-      success: true,
-      shareId: savedShare.shareId, // Make sure this is at the top level
-      shareUrl: `http://localhost:5173/share/${savedShare.shareId}`,
-      expiresAt: savedShare.expiresAt,
-      mode: savedShare.mode,
-      data: {
-        shareId: savedShare.shareId,
-        shareUrl: `http://localhost:5173/share/${savedShare.shareId}`,
-        expiresAt: savedShare.expiresAt,
-        mode: savedShare.mode,
-      },
-    })
-  } catch (error) {
-    console.error("Create share error:", error)
-    res.status(500).json({
-      success: false,
-      message: "Failed to create share",
-      error: error.message,
-    })
-  }
-})
+});
 
 router.get("/:shareId", async (req, res) => {
-  try {
-    const { shareId } = req.params
-    const { password } = req.query
+    try {
+        const { shareId } = req.params;
+        const { password: clientPassword } = req.query;
+        const share = await Share.findOne({ shareId }).populate("files");
 
-    console.log("API: Looking for share:", shareId)
+        if (!share) {
+            return res.status(404).json({
+                success: false,
+                message: "Share not found. It may have expired or the link is invalid.",
+            });
+        }
+        if (share.isExpired) {
+            return res.status(410).json({
+                success: false,
+                message: "Share has expired",
+            });
+        }
 
-    // Add timeout to prevent hanging requests
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Database query timeout")), 5000),
-    )
+        // *** ENHANCED SECURITY LOGIC ***
+        // A share is protected if its password field is a non-empty string (a real hash is long).
+        const isProtected = share.password && share.password.length > 20;
 
-    const queryPromise = Share.findOne({ shareId }).populate("files")
-    const share = await Promise.race([queryPromise, timeoutPromise])
+        // Case 1: The share is NOT protected (public).
+        if (!isProtected) {
+            // However, if it's in 'private' mode, it's a server configuration error.
+            if (share.mode === 'private') {
+                console.error("CRITICAL SERVER ERROR: Private share found with no valid password hash.");
+                return res.status(500).json({ success: false, message: "Server configuration error for this share." });
+            }
+            share.stats.views += 1;
+            await share.save();
+            const shareData = share.toObject();
+            delete shareData.password;
+            return res.json({ success: true, data: shareData });
+        }
 
-    console.log("API: Found share:", share ? `Yes (${share.mode})` : "No")
+        if (!clientPassword) {
+            return res.status(401).json({
+                success: false,
+                message: "Password required for this share",
+                requiresPassword: true,
+            });
+        }
 
-    if (!share) {
-      console.log("API: Share not found in database")
-      return res.status(404).json({
-        success: false,
-        message: "Share not found. It may have expired or the link is invalid.",
-        shareId: shareId,
-      })
+        let isValidPassword = false;
+        try {
+            isValidPassword = await bcrypt.compare(clientPassword.trim(), share.password);
+        } catch (bcryptError) {
+            console.error("bcrypt comparison failed:", bcryptError);
+            return res.status(500).json({
+                success: false,
+                message: "Authentication system error",
+            });
+        }
+
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid password. Please check your password and try again.",
+                requiresPassword: true,
+            });
+        }
+
+        // Increment view count and return data
+        share.stats.views += 1;
+        await share.save();
+        const shareData = share.toObject();
+        delete shareData.password; // Never send password hash to client
+
+        res.json({
+            success: true,
+            data: shareData,
+        });
+
+    } catch (error) {
+        console.error("Authentication error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Authentication failed due to server error",
+            error: error.message,
+        });
     }
+});
 
-    console.log("API: Share expires at:", share.expiresAt, "Current time:", new Date())
-
-    if (share.isExpired) {
-      console.log("API: Share has expired")
-      return res.status(410).json({
-        success: false,
-        message: "Share has expired",
-        shareId: shareId,
-      })
-    }
-
-    // Check password for private shares
-    if (share.mode === "private" && share.password) {
-      if (!password) {
-        console.log("API: Password required for private share")
-        return res.status(401).json({
-          success: false,
-          message: "Password required",
-          requiresPassword: true,
-          shareId: shareId,
-        })
-      }
-
-      const isValidPassword = await bcrypt.compare(password, share.password)
-      if (!isValidPassword) {
-        console.log("API: Invalid password provided")
-        return res.status(401).json({
-          success: false,
-          message: "Invalid password",
-          requiresPassword: true,
-          shareId: shareId,
-        })
-      }
-    }
-
-    // Increment view count
-    share.stats.views += 1
-    await share.save()
-
-    const shareData = share.toObject()
-    delete shareData.password // Never send password hash to client
-
-    console.log("API: Returning share data successfully")
-
-    res.json({
-      success: true,
-      data: shareData,
-    })
-  } catch (error) {
-    console.error("API: Get share error:", error)
-
-    if (error.message.includes("timeout")) {
-      return res.status(408).json({
-        success: false,
-        message: "Request timeout. Please try again.",
-        shareId: req.params.shareId,
-      })
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to get share. Please try again.",
-      error: error.message,
-      shareId: req.params.shareId,
-    })
-  }
-})
 
 // Get all shares (for debugging)
 router.get("/", async (req, res) => {
-  try {
-    const shares = await Share.find({})
-      .select("shareId mode title createdAt expiresAt stats")
-      .sort({ createdAt: -1 })
-      .limit(50)
+    try {
+        const shares = await Share.find({})
+            .select("shareId mode title createdAt expiresAt stats password")
+            .sort({ createdAt: -1 })
+            .limit(50);
 
-    res.json({
-      success: true,
-      data: shares,
-      count: shares.length,
-    })
-  } catch (error) {
-    console.error("Get all shares error:", error)
-    res.status(500).json({
-      success: false,
-      message: "Failed to get shares",
-    })
-  }
-})
+        const sharesWithPasswordStatus = shares.map((share) => ({
+            shareId: share.shareId,
+            mode: share.mode,
+            title: share.title,
+            createdAt: share.createdAt,
+            expiresAt: share.expiresAt,
+            hasPassword: !!share.password,
+            passwordHashLength: share.password ? share.password.length : 0,
+            views: share.stats?.views || 0,
+        }));
+
+        res.json({
+            success: true,
+            data: sharesWithPasswordStatus,
+            count: shares.length,
+        });
+    } catch (error) {
+        console.error("Get all shares error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to get shares",
+        });
+    }
+});
 
 router.put("/:shareId", async (req, res) => {
-  try {
-    const { shareId } = req.params
-    const { textContent, language, title } = req.body
+    try {
+        const { shareId } = req.params;
+        const { textContent, language, title } = req.body;
 
-    const share = await Share.findOne({ shareId })
+        const share = await Share.findOne({ shareId });
 
-    if (!share) {
-      return res.status(404).json({ success: false, message: "Share not found" })
+        if (!share) {
+            return res.status(404).json({ success: false, message: "Share not found" });
+        }
+
+        if (share.isExpired) {
+            return res.status(410).json({ success: false, message: "Share has expired" });
+        }
+
+        // Update fields if provided
+        if (textContent !== undefined) share.textContent = textContent;
+        if (language !== undefined) share.language = language;
+        if (title !== undefined) share.title = title;
+
+        share.stats.edits += 1;
+        await share.save();
+
+        res.json({
+            success: true,
+            data: {
+                textContent: share.textContent,
+                language: share.language,
+                title: share.title,
+            },
+        });
+    } catch (error) {
+        console.error("Update share error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to update share",
+        });
     }
-
-    if (share.isExpired) {
-      return res.status(410).json({ success: false, message: "Share has expired" })
-    }
-
-    // Update fields if provided
-    if (textContent !== undefined) share.textContent = textContent
-    if (language !== undefined) share.language = language
-    if (title !== undefined) share.title = title
-
-    share.stats.edits += 1
-    await share.save()
-
-    res.json({
-      success: true,
-      data: {
-        textContent: share.textContent,
-        language: share.language,
-        title: share.title,
-      },
-    })
-  } catch (error) {
-    console.error("Update share error:", error)
-    res.status(500).json({
-      success: false,
-      message: "Failed to update share",
-    })
-  }
-})
+});
 
 router.delete("/:shareId", async (req, res) => {
-  try {
-    const { shareId } = req.params
+    try {
+        const { shareId } = req.params;
 
-    const share = await Share.findOne({ shareId }).populate("files")
+        const share = await Share.findOne({ shareId }).populate("files");
 
-    if (!share) {
-      return res.status(404).json({ success: false, message: "Share not found" })
+        if (!share) {
+            return res.status(404).json({ success: false, message: "Share not found" });
+        }
+
+        // Clean up associated files
+        if (share.files && share.files.length > 0) {
+            const { deleteFiles } = await import("../utils/cleanup.js");
+            await deleteFiles(share.files);
+        }
+
+        await Share.deleteOne({ shareId });
+
+        res.json({ success: true, message: "Share deleted successfully" });
+    } catch (error) {
+        console.error("Delete share error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to delete share",
+        });
     }
+});
 
-    // Clean up associated files
-    if (share.files && share.files.length > 0) {
-      const { deleteFiles } = await import("../utils/cleanup.js")
-      await deleteFiles(share.files)
-    }
-
-    await Share.deleteOne({ shareId })
-
-    res.json({ success: true, message: "Share deleted successfully" })
-  } catch (error) {
-    console.error("Delete share error:", error)
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete share",
-    })
-  }
-})
-
-export default router
+export default router;

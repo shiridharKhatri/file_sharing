@@ -66,13 +66,11 @@ async function getOrCreateSpecialShare(shareId) {
 
     if (!share) {
       // Create the special share if it doesn't exist
-      console.log(`Creating special share: ${shareId}`)
       share = new Share({
         shareId,
         ...specialShares[shareId],
       })
       await share.save()
-      console.log(`Special share created: ${shareId}`)
     }
 
     return share
@@ -86,8 +84,6 @@ router.post("/upload/:shareId", upload.array("files", 10), async (req, res) => {
     const { shareId } = req.params
     const uploadedFiles = req.files
 
-    console.log(`File upload request for shareId: ${shareId}`)
-
     if (!uploadedFiles || uploadedFiles.length === 0) {
       return res.status(400).json({ success: false, message: "No files uploaded" })
     }
@@ -96,27 +92,21 @@ router.post("/upload/:shareId", upload.array("files", 10), async (req, res) => {
 
     // Handle special share IDs (public-global, local-network)
     if (shareId === "public-global" || shareId === "local-network") {
-      console.log(`Handling special share: ${shareId}`)
       share = await getOrCreateSpecialShare(shareId)
     } else {
       // Handle regular private shares
-      console.log(`Looking for regular share: ${shareId}`)
       share = await Share.findOne({ shareId })
     }
 
     if (!share) {
-      console.log(`Share not found: ${shareId}`)
       await Promise.all(uploadedFiles.map((file) => fs.unlink(file.path).catch(() => {})))
       return res.status(404).json({ success: false, message: "Share not found" })
     }
 
     if (share.isExpired) {
-      console.log(`Share expired: ${shareId}`)
       await Promise.all(uploadedFiles.map((file) => fs.unlink(file.path).catch(() => {})))
       return res.status(410).json({ success: false, message: "Share has expired" })
     }
-
-    console.log(`Processing ${uploadedFiles.length} files for share: ${shareId}`)
 
     const fileRecords = await Promise.all(
       uploadedFiles.map(async (file) => {
@@ -135,7 +125,6 @@ router.post("/upload/:shareId", upload.array("files", 10), async (req, res) => {
         })
 
         await fileRecord.save()
-        console.log(`File saved: ${file.originalname} (${fileRecord._id})`)
         return fileRecord
       }),
     )
@@ -143,8 +132,6 @@ router.post("/upload/:shareId", upload.array("files", 10), async (req, res) => {
     // Add file references to share
     share.files.push(...fileRecords.map((f) => f._id))
     await share.save()
-
-    console.log(`Files uploaded successfully to share: ${shareId}`)
 
     res.json({
       success: true,

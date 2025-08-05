@@ -1,7 +1,7 @@
 import axios from "axios"
 
 const api = axios.create({
-  baseURL: "http://localhost:5000/api",
+  baseURL:`${import.meta.env.VITE_BACKEND_HOST}/api` || "http://localhost:5000/api",
   timeout: 30000,
   headers: {
     "Content-Type": "application/json",
@@ -10,7 +10,6 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`)
     if (config.data instanceof FormData) {
       delete config.headers["Content-Type"]
     }
@@ -24,7 +23,6 @@ api.interceptors.request.use(
 
 api.interceptors.response.use(
   (response) => {
-    console.log(`API Response: ${response.status} ${response.config.url}`)
     return response
   },
   (error) => {
@@ -40,11 +38,9 @@ api.interceptors.response.use(
 
 export const shareAPI = {
   create: (data) => {
-    console.log("Creating share with API:", data)
     return api.post("/shares", data)
   },
   get: (shareId, password = null) => {
-    console.log("Getting share:", shareId, password ? "with password" : "no password")
     return api.get(`/shares/${shareId}${password ? `?password=${password}` : ""}`)
   },
   getAll: () => api.get("/shares"),
